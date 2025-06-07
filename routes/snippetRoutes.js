@@ -1,55 +1,74 @@
 const express = require("express");
-const Snippet = require("../models/Snippet");
-
+const mongoose = require("mongoose");
 const router = express.Router();
+const Snippet = require("../models/Snippet");
+const authMiddleware = require("../Middleware/authMiddleware");
 
+router.use(authMiddleware);
 
 router.get("/", async (req, res) => {
-  const snippets = await Snippet.find();
-  res.json(snippets);
+  try {
+    const ownerId = new mongoose.Types.ObjectId(req.user._id); 
+    const snippets = await Snippet.find({
+      $or: [
+        { owner: ownerId },
+        { isPublic: true }
+      ]
+    }).sort({ createdAt: -1 });
+    res.json(snippets);
+  } catch (err) {
+    console.error("Failed to fetch snippets:", err);
+    res.status(500).json({ message: "Failed to fetch snippets" });
+  }
 });
 
 
 
 router.post("/", async (req, res) => {
+  const { title, content, category, isPublic } = req.body;
   try {
-    const snippet = new Snippet(req.body);
-    const savedSnippet = await snippet.save();
-
-    res.status(201).json(savedSnippet);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to create snippet" });
-  }
-});
-
-
-
-router.delete("/:id", async (req, res) => {
-  try {
-    const deleted = await Snippet.findByIdAndDelete(req.params.id);
-    if (!deleted) {
-      return res.status(404).json({ error: "Snippet not found" });
-    }
-    res.status(204).end();
+    const newSnippet = new Snippet({
+      title,
+      content,
+      category,
+      isPublic: isPublic ?? false,
+      owner: req.user._id,
+    });
+    await newSnippet.save();
+    res.status(201).json(newSnippet);
   } catch (err) {
-    res.status(500).json({ error: "Error deleting snippet" });
+    res.status(400).json({ message: "Failed to create snippet" });
   }
 });
-
 
 
 router.put("/:id", async (req, res) => {
+  const { id } = req.params;
+
   try {
-    const updatedSnippet = await Snippet.findByIdAndUpdate(
-      req.params.id,
+    const snippet = await Snippet.findOneAndUpdate(
+      { _id: id, owner: req.user._id },
       req.body,
       { new: true }
     );
-    res.json(updatedSnippet);
+    if (!snippet) return res.status(404).json({ message: "Not found or unauthorized" });
+    res.json(snippet);
   } catch (err) {
-    res.status(500).json({ error: "Error updating snippet" });
+    res.status(400).json({ message: "Update failed" });
   }
 });
 
+
+router.delete("/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const deleted = await Snippet.findOneAndDelete({ _id: id, owner: req.user._id });
+    if (!deleted) return res.status(404).json({ message: "Not found or unauthorized" });
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    res.status(400).json({ message: "Delete failed" });
+  }
+});
 
 module.exports = router;
