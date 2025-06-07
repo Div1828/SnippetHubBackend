@@ -8,7 +8,8 @@ const snippetSchema = new mongoose.Schema(
     pinned: { type: Boolean, default: false },
     isPublic: { type: Boolean, default: false },
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    collaborators: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    ownerUsername: { type: String, required: true },
+    collaborators: [{ type: String }]
   },
   { timestamps: true }
 );
