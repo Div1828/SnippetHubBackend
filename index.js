@@ -1,4 +1,3 @@
-
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -14,7 +13,14 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+
+const corsOptions = {
+  origin: "https://snippet-hub-six.vercel.app",
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
 app.use("/api/snippets", snippetRoutes);
@@ -28,11 +34,11 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: "https://snippet-hub-six.vercel.app",
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
-
 
 const snippetPresence = {};
 
@@ -43,7 +49,6 @@ io.on("connection", (socket) => {
     socket.join(snippetId);
     console.log(`🟢 User ${userId} joined snippet ${snippetId}`);
 
-  
     if (!snippetPresence[snippetId]) snippetPresence[snippetId] = new Set();
     snippetPresence[snippetId].add(userId);
 
