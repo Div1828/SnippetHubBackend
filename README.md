@@ -7,7 +7,7 @@ SnippetHub is a full-stack web app to save, organize, and collaborate on your pe
 ## Live Demo
 
 - Frontend (Vercel): [snippet-hub-six.vercel.app](https://snippet-hub-six.vercel.app)
-- Backend (Render): [snippethub-backend.onrender.com](https://snippethub-backend.onrender.com)
+- Backend (Render): [snippethub-backend.onrender.com](https://snippethubbackend.onrender.com)
 
 ---
 
