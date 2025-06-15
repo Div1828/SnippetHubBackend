@@ -1,139 +1,141 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
-const router = express.Router();
 const Snippet = require("../models/Snippet");
-const authMiddleware = require("../Middleware/authMiddleware");
+const User = require("../models/User");
+const redis = require("../redisClient"); 
+
+const router = express.Router();
+
+async function getUserFromToken(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) throw new Error("Missing token");
+
+  const token = authHeader.split(" ")[1];
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const user = await User.findById(decoded.id);
+  if (!user) throw new Error("User not found");
+  return user;
+}
 
 
 router.get("/", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  let userId = null;
-  let username = null;
-
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    try {
-      const token = authHeader.split(" ")[1];
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      userId = decoded.id;
-
-      
-      const User = require("../models/User");
-      const user = await User.findById(userId).select("username");
-      if (user) username = user.username;
-    } catch (err) {
-      
-    }
-  }
-
   try {
-    const query = username
-      ? {
-          $or: [
-            { owner: userId },
-            { isPublic: true },
-            { collaborators: username },
-          ],
-        }
-      : { isPublic: true };
+    const user = await getUserFromToken(req);
+    const username = user.username;
+    const redisKey = `snippets:${username}`;
+
+    const cached = await redis.get(redisKey);
+    if (cached) {
+      console.log("🧠 Redis cache hit");
+      return res.json(JSON.parse(cached));
+    }
+
+    console.log("💾 Redis cache miss. Fetching MongoDB...");
+    const query = {
+      $or: [
+        { owner: user._id },
+        { isPublic: true },
+        { collaborators: username },
+      ],
+    };
 
     const snippets = await Snippet.find(query).populate("owner", "username");
+    await redis.set(redisKey, JSON.stringify(snippets), "EX", 3600);
+
     res.json(snippets);
   } catch (err) {
-    console.error("Failed to fetch snippets:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Error fetching snippets:", err.message);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
 
-router.post("/", authMiddleware, async (req, res) => {
-  const { title, content, category, isPublic, collaborators = [] } = req.body;
-
+router.post("/", async (req, res) => {
   try {
+    const user = await getUserFromToken(req);
+    const { title, content, category, isPublic, collaborators } = req.body;
+
     const newSnippet = new Snippet({
       title,
       content,
       category,
-      isPublic: isPublic ?? false,
-      owner: req.user._id,
-      ownerUsername: req.user.username,
-      collaborators,
+      isPublic: !!isPublic,
+      collaborators: collaborators || [],
+      owner: user._id,
+      ownerUsername: user.username,
     });
 
-    await newSnippet.save();
-    res.status(201).json(newSnippet);
+    const saved = await newSnippet.save();
+    await redis.del(`snippets:${user.username}`);
+
+    const populated = await Snippet.findById(saved._id).populate("owner", "username");
+    res.status(201).json(populated);
   } catch (err) {
-    console.error("Failed to create snippet:", err);
-    res.status(400).json({ message: "Failed to create snippet" });
+    console.error("❌ Error creating snippet:", err.message);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
 
-router.put("/:id", authMiddleware, async (req, res) => {
-  const { id } = req.params;
-
+router.put("/:id", async (req, res) => {
   try {
-    const snippet = await Snippet.findById(id);
+    const user = await getUserFromToken(req);
+    const snippetId = req.params.id;
+
+    const snippet = await Snippet.findById(snippetId);
     if (!snippet) return res.status(404).json({ message: "Snippet not found" });
 
-    const isOwner = snippet.owner.toString() === req.user._id.toString();
-    const isCollaborator = snippet.collaborators.includes(req.user.username);
+    const isOwner = snippet.owner.toString() === user._id.toString();
+    const isCollaborator = snippet.collaborators.includes(user.username);
 
     if (!isOwner && !isCollaborator) {
       return res.status(403).json({ message: "Not authorized to edit" });
     }
 
-    if (isOwner) {
-      
-      Object.assign(snippet, req.body);
-    } else {
-    
-      if (req.body.title !== undefined) snippet.title = req.body.title;
-      if (req.body.content !== undefined) snippet.content = req.body.content;
-    }
+    const fieldsToUpdate = ["title", "content", "category", "isPublic", "collaborators"];
+    fieldsToUpdate.forEach((field) => {
+      if (req.body[field] !== undefined) snippet[field] = req.body[field];
+    });
 
     await snippet.save();
-    res.json(snippet);
+
+    const affectedUsers = [snippet.ownerUsername, ...(snippet.collaborators || [])];
+    const uniqueKeys = new Set(affectedUsers.map(u => `snippets:${u}`));
+    for (const key of uniqueKeys) {
+      await redis.del(key);
+    }
+
+    const updated = await Snippet.findById(snippet._id).populate("owner", "username");
+    res.json(updated);
   } catch (err) {
-    console.error("Edit failed:", err);
-    res.status(400).json({ message: "Update failed" });
+    console.error("❌ Error updating snippet:", err.message);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
 
-router.delete("/:id", authMiddleware, async (req, res) => {
-  const { id } = req.params;
-
+router.delete("/:id", async (req, res) => {
   try {
-    const deleted = await Snippet.findOneAndDelete({ _id: id, owner: req.user._id });
-    if (!deleted) return res.status(404).json({ message: "Not found or unauthorized" });
-    res.json({ message: "Deleted successfully" });
-  } catch (err) {
-    res.status(400).json({ message: "Delete failed" });
-  }
-});
-
-
-router.patch("/:id/toggle-public", authMiddleware, async (req, res) => {
-  try {
+    const user = await getUserFromToken(req);
     const snippet = await Snippet.findById(req.params.id);
     if (!snippet) return res.status(404).json({ message: "Snippet not found" });
 
-    const userId = req.user._id.toString();
-    const username = req.user.username;
-    const isOwner = snippet.owner.toString() === userId;
-    const isCollaborator = snippet.collaborators.includes(username);
+    const isOwner = snippet.owner.toString() === user._id.toString();
+    if (!isOwner) return res.status(403).json({ message: "Only owner can delete" });
 
-    if (!isOwner && !isCollaborator) {
-      return res.status(403).json({ message: "Access denied" });
+    await snippet.deleteOne();
+
+    const affectedUsers = [snippet.ownerUsername, ...(snippet.collaborators || [])];
+    const uniqueKeys = new Set(affectedUsers.map(u => `snippets:${u}`));
+    for (const key of uniqueKeys) {
+      await redis.del(key);
     }
 
-    snippet.isPublic = !snippet.isPublic;
-    await snippet.save();
-
-    res.json({ success: true, isPublic: snippet.isPublic });
+    res.json({ message: "Snippet deleted" });
   } catch (err) {
-    console.error("Toggle public error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Error deleting snippet:", err.message);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 

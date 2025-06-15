@@ -1,40 +1,42 @@
+require("dotenv").config();
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const dotenv = require("dotenv");
 const http = require("http");
 const { Server } = require("socket.io");
 
+
+const redis = require("./redisClient"); 
 const snippetRoutes = require("./routes/snippetRoutes");
 const authRoutes = require("./routes/authRoutes");
 const usersRoutes = require("./routes/usersRoutes");
 
-dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 
-const corsOptions = {
-  origin: "https://snippet-hub-six.vercel.app",
+app.use(cors({
+  origin: "http://localhost:5173",
   credentials: true,
-};
-
-app.use(cors(corsOptions));
-
+}));
 app.use(express.json());
+
 
 app.use("/api/snippets", snippetRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/users", usersRoutes);
 
+
 app.get("/", (req, res) => {
   res.send("SnippetHub backend is live");
 });
 
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "https://snippet-hub-six.vercel.app",
+    origin: "http://localhost:5173",
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -65,8 +67,11 @@ io.on("connection", (socket) => {
 
     if (snippetPresence[snippetId]) {
       snippetPresence[snippetId].delete(userId);
-      if (snippetPresence[snippetId].size === 0) delete snippetPresence[snippetId];
-      else io.to(snippetId).emit("presenceUpdate", Array.from(snippetPresence[snippetId]));
+      if (snippetPresence[snippetId].size === 0) {
+        delete snippetPresence[snippetId];
+      } else {
+        io.to(snippetId).emit("presenceUpdate", Array.from(snippetPresence[snippetId]));
+      }
     }
   });
 
@@ -87,12 +92,12 @@ io.on("connection", (socket) => {
   });
 });
 
-mongoose
-  .connect(process.env.MONGO_URI)
+
+mongoose.connect(process.env.MONGO_URI)
   .then(() => {
     console.log("✅ Connected to MongoDB");
     server.listen(PORT, () =>
-      console.log(`🚀 Server running on http://localhost:${PORT}`)
+      console.log(`🚀 Server running at http://localhost:${PORT}`)
     );
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
