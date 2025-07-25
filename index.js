@@ -6,8 +6,6 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 
-
-const redis = require("./redisClient"); 
 const snippetRoutes = require("./routes/snippetRoutes");
 const authRoutes = require("./routes/authRoutes");
 const usersRoutes = require("./routes/usersRoutes");
