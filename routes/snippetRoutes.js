@@ -3,7 +3,6 @@ const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const Snippet = require("../models/Snippet");
 const User = require("../models/User");
-const redis = require("../redisClient"); 
 
 const router = express.Router();
 
@@ -18,20 +17,12 @@ async function getUserFromToken(req) {
   return user;
 }
 
-
 router.get("/", async (req, res) => {
   try {
     const user = await getUserFromToken(req);
     const username = user.username;
-    const redisKey = `snippets:${username}`;
 
-    const cached = await redis.get(redisKey);
-    if (cached) {
-      console.log("🧠 Redis cache hit");
-      return res.json(JSON.parse(cached));
-    }
-
-    console.log("💾 Redis cache miss. Fetching MongoDB...");
+    console.log("📦 Fetching snippets from MongoDB...");
     const query = {
       $or: [
         { owner: user._id },
@@ -41,15 +32,12 @@ router.get("/", async (req, res) => {
     };
 
     const snippets = await Snippet.find(query).populate("owner", "username");
-    await redis.set(redisKey, JSON.stringify(snippets), "EX", 3600);
-
     res.json(snippets);
   } catch (err) {
     console.error("❌ Error fetching snippets:", err.message);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
-
 
 router.post("/", async (req, res) => {
   try {
@@ -67,16 +55,14 @@ router.post("/", async (req, res) => {
     });
 
     const saved = await newSnippet.save();
-    await redis.del(`snippets:${user.username}`);
-
     const populated = await Snippet.findById(saved._id).populate("owner", "username");
+
     res.status(201).json(populated);
   } catch (err) {
     console.error("❌ Error creating snippet:", err.message);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
-
 
 router.put("/:id", async (req, res) => {
   try {
@@ -99,13 +85,6 @@ router.put("/:id", async (req, res) => {
     });
 
     await snippet.save();
-
-    const affectedUsers = [snippet.ownerUsername, ...(snippet.collaborators || [])];
-    const uniqueKeys = new Set(affectedUsers.map(u => `snippets:${u}`));
-    for (const key of uniqueKeys) {
-      await redis.del(key);
-    }
-
     const updated = await Snippet.findById(snippet._id).populate("owner", "username");
     res.json(updated);
   } catch (err) {
@@ -113,7 +92,6 @@ router.put("/:id", async (req, res) => {
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
-
 
 router.delete("/:id", async (req, res) => {
   try {
@@ -125,13 +103,6 @@ router.delete("/:id", async (req, res) => {
     if (!isOwner) return res.status(403).json({ message: "Only owner can delete" });
 
     await snippet.deleteOne();
-
-    const affectedUsers = [snippet.ownerUsername, ...(snippet.collaborators || [])];
-    const uniqueKeys = new Set(affectedUsers.map(u => `snippets:${u}`));
-    for (const key of uniqueKeys) {
-      await redis.del(key);
-    }
-
     res.json({ message: "Snippet deleted" });
   } catch (err) {
     console.error("❌ Error deleting snippet:", err.message);
